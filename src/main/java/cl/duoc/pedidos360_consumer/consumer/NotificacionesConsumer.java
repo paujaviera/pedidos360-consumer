@@ -12,28 +12,66 @@ import org.springframework.stereotype.Component;
 
 import com.rabbitmq.client.Channel;
 
-import cl.duoc.pedidos360_backend.messaging.event.PedidoEvent;
+import cl.duoc.pedidos360_backend.messaging.event.PedidoEvent;;
 
 @Component
 public class NotificacionesConsumer {
 
-    private static final Logger log = LoggerFactory.getLogger(NotificacionesConsumer.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(NotificacionesConsumer.class);
 
-    @RabbitListener(queues = "${app.rabbit.queue.notificaciones}")
-    public void procesar(@Payload PedidoEvent evento,
-                         Channel channel,
-                         @Header(AmqpHeaders.DELIVERY_TAG) long tag,
-                         @Header(AmqpHeaders.REDELIVERED) boolean redelivered) throws IOException {
+    @RabbitListener(
+            queues = "${app.rabbit.queue.notificaciones}",
+            ackMode = "MANUAL"
+    )
+    public void procesar(
+            @Payload PedidoEvent evento,
+            Channel channel,
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag,
+            @Header(AmqpHeaders.REDELIVERED) boolean redelivered
+    ) throws IOException {
+
         try {
-            log.info("[NOTIFICACION] Pedido {} de '{}' en estado {}",
-                    evento.id(), evento.producto(), evento.estado());
-            channel.basicAck(tag, false);
+
+            if (evento == null) {
+                throw new IllegalArgumentException(
+                        "El evento recibido es nulo"
+                );
+            }
+
+            log.info(
+                    "Notificación procesada correctamente. Evento: {}",
+                    evento
+            );
+
+            // Confirmar procesamiento exitoso
+            channel.basicAck(deliveryTag, false);
+
         } catch (IllegalArgumentException e) {
-            log.error("[NOTIFICACION] Error no recuperable, enviando a DLQ: {}", e.getMessage());
-            channel.basicNack(tag, false, false);
+
+            log.error(
+                    "Evento inválido. Enviando a DLQ. Motivo: {}",
+                    e.getMessage()
+            );
+
+            // Evento inválido: enviar directamente a DLQ
+            channel.basicNack(deliveryTag, false, false);
+
         } catch (Exception e) {
-            log.warn("[NOTIFICACION] Error (redelivered={}): {}", redelivered, e.getMessage());
-            channel.basicNack(tag, false, !redelivered);
+
+            log.error(
+                    "Error procesando notificación. Redelivered: {}",
+                    redelivered,
+                    e
+            );
+
+            // Primer intento fallido: reintentar
+            // Segundo intento fallido: enviar a DLQ
+            channel.basicNack(
+                    deliveryTag,
+                    false,
+                    !redelivered
+            );
         }
     }
 }
